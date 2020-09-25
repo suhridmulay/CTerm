@@ -2,6 +2,8 @@
 #include<stdlib.h>
 #include<unistd.h>
 #include<string.h>
+#include<fcntl.h>
+#include<signal.h>
 
 #define EXIT_CODE "quit"
 #define PATH_SIZE 256
@@ -54,6 +56,25 @@ void execute_parallel(char ** command);
 void execute_multiple_serial(char *** commands);
 void execute_multiple_parallel(char *** commands);
 
+void write_output(char ** buffer, char * filename) {
+    int pid = fork();
+    int fdr = open(filename, O_CREAT|O_WRONLY|O_TRUNC, 0777);
+    if (pid == 0) {
+        dup2(fdr, 1);
+        signal(SIGTSTP, SIG_DFL);
+        signal(SIGINT, SIG_DFL);
+        execvp(buffer[0], &buffer[0]);
+        fsync(fdr);
+        exit(0);
+    } else if (pid > 0) {
+        return;
+    }
+}
+
+void fancy_exit() {
+    printf("use quit to exit terminal\n");
+}
+
 int main() {
     // Initialisation
 
@@ -69,9 +90,15 @@ int main() {
         fprintf(stderr, "ERROR: Unable to allocate line buffer, exiting");
         running = 0;
     }
-
+    if (*linebuf == EOF) {
+        fprintf(stderr, "Messed up");
+        running = 0;
+    }
+    signal(SIGTSTP, SIG_IGN);
+    signal(SIGINT, SIG_IGN);
     // Terminal loop
     while(running) {
+        // Handle signals
         // Display terminal prompt
         printf("%s\n", curr_path);
         printf("%s", PROMPT);
@@ -90,10 +117,14 @@ int main() {
             int i = 0;
             int buf_start = 0;
             while(token != NULL) {
+                if (linebuf == NULL) {
+                    exit(-1);
+                }
                 // If token is not ## or &&
                 int hh = strcmp(token, "##");
                 int aa = strcmp(token, "&&");
-                if (hh != 0 && aa != 0) {
+                int redir = strcmp(token, ">");
+                if (hh != 0 && aa != 0 && redir != 0) {
                     // -- Collect token into a buffer
                     cmd_buf[i] = token;
                     cmd_buf[i + 1] = NULL;
@@ -108,6 +139,10 @@ int main() {
                     if (aa == 0) {
                         execute_parallel(cmd_buf);
                     }
+                    if (redir == 0) {
+                        char * filename = strtok(NULL, " \n\t");
+                        write_output(cmd_buf, filename);
+                    }
                     i = 0;
                 }
                 token = strtok(NULL, " \n\t");
@@ -120,6 +155,10 @@ int main() {
     }
 }
 
+void handle_sigint() {
+    exit(2);
+}
+
 void execute_wait(char ** command) {
     int pid = fork();
     //printf("Executable: %s\n", command[0]);
@@ -127,6 +166,9 @@ void execute_wait(char ** command) {
     if (pid == 0) {
         // Inside child
         // -- Start running said command
+        // -- Handle sigint
+        signal(SIGTSTP, SIG_DFL);
+        signal(SIGINT, SIG_DFL);
         int res = execvp(command[0], &command[0]);
         if (res == -1) {
             printf("Error loading executable: %s\n", command[0]);
@@ -147,6 +189,9 @@ void execute_parallel(char ** command) {
     if (pid == 0) {
         // Inside child
         // -- Start running said command
+        // -- Handler for sigint
+        signal(SIGTSTP, SIG_DFL);
+        signal(SIGINT, SIG_DFL);
         int res = execvp(command[0], &command[0]);
     } else if (pid > 0) {
         // Inside parent
@@ -155,6 +200,7 @@ void execute_parallel(char ** command) {
     }
 }
 
+// Maybe unnecesary
 void execute_stmt(struct statement s) {
     if (s.command == NULL) {
         if (s.operator == 0) {
