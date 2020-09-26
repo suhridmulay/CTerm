@@ -5,13 +5,13 @@
 #include<fcntl.h>
 #include<signal.h>
 
-#define EXIT_CODE "quit"
+#define EXIT_CODE "exit"
 #define PATH_SIZE 256
 
 #define ARGC_MAX 15
 #define CMD_MAX 32
 
-#define PROMPT ">>>"
+#define PROMPT "$"
 
 char curr_path[PATH_SIZE];
 
@@ -58,13 +58,16 @@ void execute_multiple_parallel(char *** commands);
 
 void write_output(char ** buffer, char * filename) {
     int pid = fork();
-    int fdr = open(filename, O_CREAT|O_WRONLY|O_TRUNC, 0777);
     if (pid == 0) {
-        dup2(fdr, 1);
+        int fdr = open(filename, O_CREAT|O_WRONLY|O_TRUNC, 0777);
+        int save_out = dup(fileno(stdout));
+        dup2(fdr, fileno(stdout));
         signal(SIGTSTP, SIG_DFL);
         signal(SIGINT, SIG_DFL);
         execvp(buffer[0], &buffer[0]);
+        dup2(save_out, fileno(stdout));
         fsync(fdr);
+        close(fdr);
         exit(0);
     } else if (pid > 0) {
         return;
@@ -100,8 +103,7 @@ int main() {
     while(running) {
         // Handle signals
         // Display terminal prompt
-        printf("%s\n", curr_path);
-        printf("%s", PROMPT);
+        printf("%s%s", curr_path, PROMPT);
         // Scan in the line
         getline(&linebuf, &line_size, stdin);
         // Remove trailing newline
@@ -109,6 +111,7 @@ int main() {
         // Exit code check
         int x = strcmp(linebuf, EXIT_CODE);
         if (strcmp(linebuf, EXIT_CODE) == 0) {
+            printf("Exiting shell...\n");
             running = 0;
         } else {
             char * token = strtok(linebuf, " \n\t");
@@ -124,7 +127,8 @@ int main() {
                 int hh = strcmp(token, "##");
                 int aa = strcmp(token, "&&");
                 int redir = strcmp(token, ">");
-                if (hh != 0 && aa != 0 && redir != 0) {
+                int cd = strcmp(token, "cd");
+                if (hh != 0 && aa != 0 && redir != 0 && cd != 0) {
                     // -- Collect token into a buffer
                     cmd_buf[i] = token;
                     cmd_buf[i + 1] = NULL;
@@ -135,6 +139,8 @@ int main() {
                     // -- Execute buffer and reset
                     if (hh == 0) {
                         execute_wait(cmd_buf);
+                        i = 0;
+                        cmd_buf[0] = NULL;
                     }
                     if (aa == 0) {
                         execute_parallel(cmd_buf);
@@ -142,14 +148,24 @@ int main() {
                     if (redir == 0) {
                         char * filename = strtok(NULL, " \n\t");
                         write_output(cmd_buf, filename);
+                        goto HELL;
+                    }
+                    if (cd == 0) {
+                        //printf("Detected cd command\n");
+                        token = strtok(NULL, " \n\t");
+                        //printf("Moving to: %s\n", token);
+                        chdir(token);
+                        getcwd(curr_path, PATH_SIZE);
                     }
                     i = 0;
                 }
                 token = strtok(NULL, " \n\t");
             }
+            
             i++;
             cmd_buf[i] = NULL;
             execute_wait(cmd_buf);
+            HELL:
             wait(NULL);
         }
     }
@@ -171,9 +187,9 @@ void execute_wait(char ** command) {
         signal(SIGINT, SIG_DFL);
         int res = execvp(command[0], &command[0]);
         if (res == -1) {
-            printf("Error loading executable: %s\n", command[0]);
+            printf("Shell: Incorrect command\n", command[0]);
         }
-        printf("Process loading result: %d\n", res);
+        //printf("Process loading result: %d\n", res);
         exit(0);
     } else if (pid > 0) {
         // Inside parent
